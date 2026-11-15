@@ -45,12 +45,11 @@ def send_msg(chat_id, text):
     })
 
 # ============================
-# STATS
+# STATS (use dict to avoid global issues)
 # ============================
 STATS = {"checked": 0, "found": 0, "taken": 0, "errors": 0}
 FOUND_LIST = []
-HUNT_START_TIME = None
-IS_HUNTING = False
+HUNT_STATE = {"start_time": None, "is_hunting": False}
 LAST_UPDATE_ID = 0
 
 # ============================
@@ -112,16 +111,15 @@ async def check_username(session, username):
                 return "error"
     except asyncio.TimeoutError:
         return "timeout"
-    except Exception as e:
+    except Exception:
         return "conn_error"
 
 # ============================
-# HUNT LOOP (FIXED!)
+# HUNT LOOP (FIXED - uses dict!)
 # ============================
 def run_hunt(chat_id):
-    global IS_HUNTING, HUNT_START_TIME
-    IS_HUNTING = True
-    HUNT_START_TIME = time.time()
+    HUNT_STATE["is_hunting"] = True
+    HUNT_STATE["start_time"] = time.time()
     STATS["checked"] = 0
     STATS["found"] = 0
     STATS["taken"] = 0
@@ -141,7 +139,7 @@ def run_hunt(chat_id):
             batch_num = 0
             
             for combo in generate_combos():
-                if not IS_HUNTING:
+                if not HUNT_STATE["is_hunting"]:
                     log.info("Hunt stopped by user.")
                     break
                 
@@ -149,7 +147,7 @@ def run_hunt(chat_id):
                 
                 if len(batch) >= 8:
                     batch_num += 1
-                    log.info(f"Batch #{batch_num}: checking {batch[:2]}... (total checked: {STATS['checked']})")
+                    log.info(f"Batch #{batch_num}: checking {batch[:2]}... (total: {STATS['checked']})")
                     
                     tasks = [check_username(session, u) for u in batch]
                     try:
@@ -166,7 +164,7 @@ def run_hunt(chat_id):
                         
                         if isinstance(result, Exception):
                             STATS["errors"] += 1
-                            log.error(f"Exception checking @{username}: {result}")
+                            log.error(f"Exception @{username}: {result}")
                             continue
                         
                         if result == "available":
@@ -183,10 +181,10 @@ def run_hunt(chat_id):
                             await asyncio.sleep(5)
                         elif result == "timeout":
                             STATS["errors"] += 1
-                            log.warning(f"Timeout on @{username}")
+                            log.warning(f"Timeout @{username}")
                         elif result == "conn_error":
                             STATS["errors"] += 1
-                            log.warning(f"Conn error on @{username}")
+                            log.warning(f"Conn error @{username}")
                         else:
                             STATS["errors"] += 1
                     
@@ -195,7 +193,7 @@ def run_hunt(chat_id):
                     now = time.time()
                     if now - last_update >= 30:
                         last_update = now
-                        elapsed = now - HUNT_START_TIME
+                        elapsed = now - HUNT_STATE["start_time"]
                         speed = STATS["checked"] / elapsed if elapsed > 0 else 0
                         remaining = 46656 - STATS["checked"]
                         eta = remaining / speed if speed > 0 else 0
@@ -212,9 +210,8 @@ def run_hunt(chat_id):
                     
                     await asyncio.sleep(0.2)
             
-            # Done
-            IS_HUNTING = False
-            elapsed = time.time() - HUNT_START_TIME
+            HUNT_STATE["is_hunting"] = False
+            elapsed = time.time() - HUNT_STATE["start_time"]
             speed = STATS["checked"] / elapsed if elapsed > 0 else 0
             log.info(f"HUNT DONE: {STATS['checked']} checked, {STATS['found']} found")
             send_msg(chat_id,
@@ -230,20 +227,19 @@ def run_hunt(chat_id):
         asyncio.run(hunt())
     except Exception as e:
         log.error(f"HUNT CRASHED: {e}")
-        IS_HUNTING = False
+        HUNT_STATE["is_hunting"] = False
         send_msg(chat_id, f"Hunt crashed: {str(e)}")
 
 # ============================
 # COMMAND HANDLERS
 # ============================
 def handle_command(chat_id, user_id, command, args):
-    global IS_HUNTING
     if user_id != OWNER_ID:
         return
     
     if command == "/start":
         send_msg(chat_id,
-            "SYRIA HUB - TikTok Username Hunter V3.7\n\n"
+            "SYRIA HUB - TikTok Username Hunter V3.8\n\n"
             "Commands:\n"
             "/test <username> - Check single username\n"
             "/debug <username> - Debug detection\n"
@@ -339,7 +335,7 @@ def handle_command(chat_id, user_id, command, args):
         send_msg(chat_id, result[:4000])
     
     elif command == "/hunt3":
-        if IS_HUNTING:
+        if HUNT_STATE["is_hunting"]:
             send_msg(chat_id, "Already hunting! Use /stop first.")
             return
         send_msg(chat_id,
@@ -360,15 +356,15 @@ def handle_command(chat_id, user_id, command, args):
         remaining = 46656 - c
         speed = 0
         eta_str = "N/A"
-        if HUNT_START_TIME and c > 0:
-            elapsed = time.time() - HUNT_START_TIME
+        if HUNT_STATE["start_time"] and c > 0:
+            elapsed = time.time() - HUNT_STATE["start_time"]
             if elapsed > 0:
                 speed = c / elapsed
                 eta_sec = remaining / speed if speed > 0 else 0
                 h = int(eta_sec // 3600)
                 m = int((eta_sec % 3600) // 60)
                 eta_str = f"{h}h {m}m"
-        hunting_status = "HUNTING" if IS_HUNTING else "STOPPED"
+        hunting_status = "HUNTING" if HUNT_STATE["is_hunting"] else "STOPPED"
         send_msg(chat_id,
             f"STATUS [{hunting_status}]\n\n"
             f"Checked: {c}/46656\n"
@@ -388,7 +384,7 @@ def handle_command(chat_id, user_id, command, args):
             send_msg(chat_id, f"Found {len(FOUND_LIST)} usernames:\n\n{lines}")
     
     elif command == "/stop":
-        IS_HUNTING = False
+        HUNT_STATE["is_hunting"] = False
         send_msg(chat_id, "Hunt stopped!")
 
 # ============================
@@ -435,7 +431,7 @@ def polling_loop():
 # ============================
 def main():
     log.info("=" * 50)
-    log.info("SYRIA HUB TikTok Hunter V3.7 (Raw API)")
+    log.info("SYRIA HUB TikTok Hunter V3.8 (Raw API)")
     log.info("=" * 50)
     polling_loop()
 
